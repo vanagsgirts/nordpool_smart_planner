@@ -1,0 +1,9 @@
+{
+  "domain": "nordpool_smart_planner",
+  "name": "Nordpool Smart Planner",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "https://github.com/yourusername/nordpool_smart_planner",
+  "iot_class": "local_push",
+  "version": "1.0.0"
+}
