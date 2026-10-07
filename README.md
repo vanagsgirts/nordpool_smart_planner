@@ -65,7 +65,11 @@ action:
     target:
       entity_id: switch.boiler_relay
 ```
-### 2. Water Heater / Boiler (Low Cost Trigger)
+### 2. AppexCharts code example
+
+![Attēla apraksts](screen01.jpg)
+
+
 ```yaml
 type: custom:apexcharts-card
 graph_span: 34h
@@ -73,7 +77,7 @@ experimental:
   color_threshold: true
 header:
   show: true
-  title: 34 stundu grafiks (€/kWh)
+  title: 34 hours graph (long term)
   show_states: false
   standard_format: false
 span:
@@ -81,7 +85,7 @@ span:
   offset: '-1'
 now:
   show: true
-  label: Pašlaik
+  label: Now
 apex_config:
   chart:
     animations:
@@ -136,7 +140,7 @@ yaxis:
     min: 0
     max: 1
 series:
-  - entity: sensor.nordpool_energyprices
+  - entity: sensor.nordpool_kwh_lv_eur_3_10_0  # <- Change to your corresponding Nordpool energyprice sensor
     name: ' '
     yaxis_id: price_axis
     type: column
@@ -157,11 +161,12 @@ series:
         color: red
     float_precision: 4
     data_generator: |
-      return entity.attributes.times.map((time, index) => {
-        return [new Date(time).getTime(), entity.attributes.prices[index]];
-      });
+      const today = entity.attributes.raw_today || [];
+      const tomorrow = entity.attributes.raw_tomorrow || [];
+      const data = [...today, ...tomorrow];
+      return data.map(item => [new Date(item.start).getTime(), item.value]);
   - entity: sensor.nordpool_smart_planner_low_cost
-    name: Plānotais darbs
+    name: Low costs
     yaxis_id: state_axis
     type: area
     curve: stepline
@@ -177,7 +182,7 @@ series:
         if (!entity || !entity.attributes || !entity.attributes.scheduled_times) return [];
         
         const periodsAttr = entity.attributes.scheduled_times;
-        if (periodsAttr === 'Nav datu' || periodsAttr === 'Gaida Nordpool' || periodsAttr === 'unknown' || !periodsAttr) return [];
+        if (periodsAttr === 'Nav datu' || periodsAttr === 'Waiting for Nordpool' || periodsAttr === 'unknown' || !periodsAttr) return [];
 
         const periods = periodsAttr.split(', ');
         const data = [];
@@ -185,7 +190,7 @@ series:
         periods.forEach(p => {
           const start = new Date(p).getTime();
           if (!isNaN(start)) {
-            const end = start + 900000; // SVARĪGI: 15 minūtes (900000 ms), nevis 1 stunda!
+            const end = start + 900000;
             data.push([start, 0], [start, 1], [end, 1], [end, 0]);
           }
         });
@@ -196,7 +201,7 @@ series:
         return [];
       }
   - entity: sensor.nordpool_smart_planner_high_cost
-    name: Dārgais periods
+    name: High costs
     yaxis_id: state_axis
     type: area
     curve: stepline
@@ -218,7 +223,7 @@ series:
         periods.forEach(p => {
           const start = new Date(p).getTime();
           if (!isNaN(start)) {
-            const end = start + 900000; // SVARĪGI: 15 minūtes (900000 ms), nevis 1 stunda!
+            const end = start + 900000;
             data.push([start, 0], [start, 1], [end, 1], [end, 0]);
           }
         });
