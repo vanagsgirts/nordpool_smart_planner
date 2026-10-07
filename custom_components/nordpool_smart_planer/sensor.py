@@ -29,6 +29,125 @@ def extract_dt(dt_input):
     return None
 
 
+def calculate_planner_schedules(raw, options, now_dt):
+    """Galvenais dzinējs, kas aprēķina abus sensorus kopā un izslēdz pārklāšanos."""
+    fixed_threshold = float(options.get(CONF_FIXED_THRESHOLD, 0.05))
+
+    low_target_per_day = int(options.get(CONF_LOW_TARGET_PER_DAY, 4))
+    low_window_hours = float(options.get(CONF_LOW_TIME_WINDOW, 1.0))
+
+    high_target_per_day = int(options.get(CONF_HIGH_TARGET_PER_DAY, 3))
+    high_window_hours = float(options.get(CONF_HIGH_TIME_WINDOW, 0.5))
+
+    parsed_entries = []
+    for item in raw:
+        if isinstance(item, dict):
+            t_val = extract_dt(item.get("start"))
+            p_val = item.get("value")
+            if t_val is not None and p_val is not None:
+                parsed_entries.append((t_val, float(p_val)))
+
+    if not parsed_entries:
+        return [], []
+
+    today_start = now_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    tomorrow_start = today_start + timedelta(days=1)
+
+    end_of_data = parsed_entries[-1][0]
+
+    has_tomorrow = end_of_data >= (tomorrow_start + timedelta(hours=22))
+    if not has_tomorrow:
+        start_filter = today_start
+        low_hours_needed = low_target_per_day
+        high_hours_needed = high_target_per_day
+    else:
+        start_filter = now_dt.replace(minute=0, second=0, microsecond=0)
+        remaining_hours = (end_of_data - start_filter).total_seconds() / 3600
+        low_hours_needed = max(1, int(round((remaining_hours / 24) * low_target_per_day)))
+        high_hours_needed = max(1, int(round((remaining_hours / 24) * high_target_per_day)))
+
+    # --- 1. HIGH COST APRĒĶINS ---
+    high_intervals_needed = max(1, int(round(high_window_hours / 0.25)))
+    high_target_intervals = int(high_hours_needed * 4)
+
+    high_sub_indices = set()
+    high_used_indices = set()
+
+    high_all_windows = []
+    for i in range(len(parsed_entries) - high_intervals_needed + 1):
+        t_start = parsed_entries[i][0]
+        if t_start + timedelta(hours=high_window_hours) > start_filter:
+            avg_p = sum(parsed_entries[k][1] for k in range(i, i + high_intervals_needed)) / high_intervals_needed
+            if avg_p > fixed_threshold:
+                high_all_windows.append({"idx": i, "p": avg_p})
+
+    sorted_high_windows = sorted(high_all_windows, key=lambda x: x["p"], reverse=True)
+
+    for w in sorted_high_windows:
+        if len(high_sub_indices) < high_target_intervals:
+            check_indices = set(range(w["idx"], w["idx"] + high_intervals_needed))
+            if not check_indices.intersection(high_used_indices):
+                high_used_indices.update(check_indices)
+                high_sub_indices.update(check_indices)
+
+    if len(high_sub_indices) < high_target_intervals:
+        single_intervals = []
+        for i in range(len(parsed_entries)):
+            t_start = parsed_entries[i][0]
+            if t_start > start_filter and parsed_entries[i][1] > fixed_threshold:
+                single_intervals.append({"idx": i, "p": parsed_entries[i][1]})
+
+        sorted_singles = sorted(single_intervals, key=lambda x: x["p"], reverse=True)
+        for s in sorted_singles:
+            if len(high_sub_indices) < high_target_intervals:
+                high_sub_indices.add(s["idx"])
+
+    # --- 2. LOW COST APRĒĶINS (BEZ HIGH COST INDEKSIEM) ---
+    low_intervals_needed = max(1, int(round(low_window_hours / 0.25)))
+    low_target_intervals = int(low_hours_needed * 4)
+
+    low_sub_indices = set()
+    low_used_indices = set(high_sub_indices)  # SVARĪGI: Aizliedzam izmantot High Cost laikus!
+
+    # A. Fiksētais slieksnis
+    for i in range(len(parsed_entries) - low_intervals_needed + 1):
+        t_start = parsed_entries[i][0]
+        if t_start + timedelta(hours=low_window_hours) > start_filter:
+            check_indices = set(range(i, i + low_intervals_needed))
+            # Pārbaudām, lai neviens no intervāliem neietilptu High Cost sarakstā
+            if not check_indices.intersection(high_sub_indices):
+                avg_p = sum(parsed_entries[k][1] for k in range(i, i + low_intervals_needed)) / low_intervals_needed
+                if avg_p <= fixed_threshold:
+                    if not check_indices.intersection(low_used_indices):
+                        low_used_indices.update(check_indices)
+                        low_sub_indices.update(check_indices)
+
+    # B. Lētāko logu piemeklēšana
+    low_all_windows = []
+    for i in range(len(parsed_entries) - low_intervals_needed + 1):
+        t_start = parsed_entries[i][0]
+        if t_start + timedelta(hours=low_window_hours) > start_filter:
+            check_indices = set(range(i, i + low_intervals_needed))
+            if not check_indices.intersection(high_sub_indices):
+                avg_p = sum(parsed_entries[k][1] for k in range(i, i + low_intervals_needed)) / low_intervals_needed
+                score = avg_p - 0.001 if (t_start <= now_dt < t_start + timedelta(hours=low_window_hours)) else avg_p
+                low_all_windows.append({"idx": i, "p": score})
+
+    sorted_low_windows = sorted(low_all_windows, key=lambda x: x["p"])
+
+    for w in sorted_low_windows:
+        if len(low_sub_indices) < low_target_intervals:
+            check_indices = set(range(w["idx"], w["idx"] + low_intervals_needed))
+            if not check_indices.intersection(low_used_indices):
+                low_used_indices.update(check_indices)
+                low_sub_indices.update(check_indices)
+
+    sorted_high_times = [parsed_entries[i][0].isoformat() for i in sorted(list(high_sub_indices))]
+    sorted_low_times = [parsed_entries[i][0].isoformat() for i in sorted(list(low_sub_indices))]
+
+    return sorted_low_times, sorted_high_times
+
+
 async def async_setup_entry(hass, entry, async_add_entities):
     nordpool_entity = entry.data.get(CONF_NORDPOOL_ENTITY)
 
@@ -98,113 +217,12 @@ class NordpoolPlannerSensor(Entity):
             return
 
         options = {**self._entry.data, **self._entry.options}
-        fixed_threshold = float(options.get(CONF_FIXED_THRESHOLD, 0.05))
-
-        if self._sensor_type == "low_cost":
-            target_per_day = int(options.get(CONF_LOW_TARGET_PER_DAY, 4))
-            window_hours = float(options.get(CONF_LOW_TIME_WINDOW, 1.0))
-        else:
-            target_per_day = int(options.get(CONF_HIGH_TARGET_PER_DAY, 3))
-            window_hours = float(options.get(CONF_HIGH_TIME_WINDOW, 0.5))
-
-        parsed_entries = []
-        for item in raw:
-            if isinstance(item, dict):
-                t_val = extract_dt(item.get("start"))
-                p_val = item.get("value")
-                if t_val is not None and p_val is not None:
-                    parsed_entries.append((t_val, float(p_val)))
-
-        if not parsed_entries:
-            return
-
         now_dt = dt_util.now()
-        today_start = now_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-        tomorrow_start = today_start + timedelta(days=1)
 
-        end_of_data = parsed_entries[-1][0]
-
-        has_tomorrow = end_of_data >= (tomorrow_start + timedelta(hours=22))
-        if not has_tomorrow:
-            start_filter = today_start
-            hours_needed = target_per_day
-        else:
-            start_filter = now_dt.replace(minute=0, second=0, microsecond=0)
-            remaining_hours = (end_of_data - start_filter).total_seconds() / 3600
-            hours_needed = max(1, int(round((remaining_hours / 24) * target_per_day)))
-
-        target_intervals = int(hours_needed * 4)
-        intervals_needed = max(1, int(round(window_hours / 0.25)))
-
-        all_sub_indices = set()
+        # Veicam aprēķinu abiem sensoriem kopā
+        low_times, high_times = calculate_planner_schedules(raw, options, now_dt)
 
         if self._sensor_type == "low_cost":
-            # 1. Low Cost: Fiksētais slieksnis
-            selected_windows = []
-            used_indices = set()
-
-            for i in range(len(parsed_entries) - intervals_needed + 1):
-                t_start = parsed_entries[i][0]
-                if t_start + timedelta(hours=window_hours) > start_filter:
-                    avg_p = sum(parsed_entries[k][1] for k in range(i, i + intervals_needed)) / intervals_needed
-
-                    if avg_p <= fixed_threshold:
-                        check_indices = set(range(i, i + intervals_needed))
-                        if not check_indices.intersection(used_indices):
-                            selected_windows.append(i)
-                            used_indices.update(check_indices)
-                            all_sub_indices.update(check_indices)
-
-            # 2. Low Cost: Lētākās papildu stundas
-            all_windows = []
-            for i in range(len(parsed_entries) - intervals_needed + 1):
-                t_start = parsed_entries[i][0]
-                if t_start + timedelta(hours=window_hours) > start_filter:
-                    avg_p = sum(parsed_entries[k][1] for k in range(i, i + intervals_needed)) / intervals_needed
-                    score = avg_p - 0.001 if (t_start <= now_dt < t_start + timedelta(hours=window_hours)) else avg_p
-                    all_windows.append({"idx": i, "p": score})
-
-            sorted_windows = sorted(all_windows, key=lambda x: x["p"])
-
-            for w in sorted_windows:
-                if len(all_sub_indices) < target_intervals:
-                    check_indices = set(range(w["idx"], w["idx"] + intervals_needed))
-                    if not check_indices.intersection(used_indices):
-                        used_indices.update(check_indices)
-                        all_sub_indices.update(check_indices)
-
+            self._scheduled_times = low_times
         else:
-            # 1. High Cost: Atlasām dārgākos logus pa nepārtrauktiem 'High cost duration' laikiem
-            all_windows = []
-            for i in range(len(parsed_entries) - intervals_needed + 1):
-                t_start = parsed_entries[i][0]
-                if t_start + timedelta(hours=window_hours) > start_filter:
-                    avg_p = sum(parsed_entries[k][1] for k in range(i, i + intervals_needed)) / intervals_needed
-                    if avg_p > fixed_threshold:
-                        all_windows.append({"idx": i, "p": avg_p})
-
-            sorted_windows = sorted(all_windows, key=lambda x: x["p"], reverse=True)
-            used_indices = set()
-
-            for w in sorted_windows:
-                if len(all_sub_indices) < target_intervals:
-                    check_indices = set(range(w["idx"], w["idx"] + intervals_needed))
-                    if not check_indices.intersection(used_indices):
-                        used_indices.update(check_indices)
-                        all_sub_indices.update(check_indices)
-
-            # 2. High Cost: Papildinām ar atsevišķiem dārgākajiem 15min intervāliem, ja ar nepārtrauktiem logiem trūkst līdz mērķim
-            if len(all_sub_indices) < target_intervals:
-                single_intervals = []
-                for i in range(len(parsed_entries)):
-                    t_start = parsed_entries[i][0]
-                    if t_start > start_filter and parsed_entries[i][1] > fixed_threshold:
-                        single_intervals.append({"idx": i, "p": parsed_entries[i][1]})
-
-                sorted_singles = sorted(single_intervals, key=lambda x: x["p"], reverse=True)
-                for s in sorted_singles:
-                    if len(all_sub_indices) < target_intervals:
-                        all_sub_indices.add(s["idx"])
-
-        sorted_sub_indices = sorted(list(all_sub_indices))
-        self._scheduled_times = [parsed_entries[i][0].isoformat() for i in sorted_sub_indices]
+            self._scheduled_times = high_times
