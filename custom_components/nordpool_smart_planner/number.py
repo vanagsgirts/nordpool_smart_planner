@@ -13,7 +13,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     async_add_entities([
         NordpoolPlannerNumber(
             entry=entry,
-            name="Accepted low cost threshold",
+            name="Acceptable low cost threshold",
             key=CONF_FIXED_THRESHOLD,
             min_val=0.000,
             max_val=0.200,
