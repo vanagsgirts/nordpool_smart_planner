@@ -65,7 +65,7 @@ action:
     target:
       entity_id: switch.boiler_relay
 ```
-### 2. AppexCharts code example
+### 2. ApexCharts code example
 
 ![Attēla apraksts](screen01.jpg)
 
