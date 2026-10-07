@@ -64,10 +64,8 @@ action:
   - service: switch.turn_on
     target:
       entity_id: switch.boiler_relay
-
-## 🤖 Automation Examples
-
-### 2. ApexChart
+```
+### 2. Water Heater / Boiler (Low Cost Trigger)
 ```yaml
 type: custom:apexcharts-card
 graph_span: 34h
@@ -229,3 +227,4 @@ series:
         console.error("ApexCharts error:", e);
         return [];
       }
+```
