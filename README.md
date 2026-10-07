@@ -6,6 +6,8 @@
 
 It natively supports **15-minute price resolution**, fixed cost thresholds, and completely independent optimization algorithms for low-cost consumption periods (`Low cost`) and high-cost peak curtailment periods (`High cost`).
 
+![Attēla apraksts](screen01.jpg)
+
 ---
 
 ## 🚀 Key Features
@@ -66,10 +68,6 @@ action:
       entity_id: switch.boiler_relay
 ```
 ### 2. ApexCharts code example
-
-![Attēla apraksts](screen01.jpg)
-
-
 ```yaml
 type: custom:apexcharts-card
 graph_span: 34h
